@@ -1,0 +1,207 @@
+---
+title: "Price prediction algorithms"
+---
+# Introduction
+
+It contains different algorithms to predict the price of diamond
+
+# Prepare Data 
+
+Call the necessary libraries for the project.
+
+```{r message=FALSE,warning=FALSE}
+library(randomForest)
+library(tidyverse)
+library(dplyr)
+library(gvlma)
+library(caret)
+library(Metrics)
+library(MLmetrics)
+library(plot3D)
+library(plot3Drgl)
+library(rgl)
+library(corrplot)
+library(caTools)
+library(ROCR)
+library(party)
+```
+
+Then we call the diamond data
+
+```{r message=FALSE,warning=FALSE}
+dt <- read.csv("diamonds.csv")
+dt=dt[1:20000,]
+dt
+```
+
+We clean and prepare the data, delete the first column and change the value of clarity,color and cut to numeric values.
+Variables:
+
+-   price price in US dollars (\$326--\$18,823)
+-   carat weight of the diamond (0.2--5.01)
+-   cut quality of the cut (Fair, Good, Very Good, Premium, Ideal)
+-   color diamond colour, from J (worst) to D (best)
+-   clarity a measurement of how clear the diamond is (I1 (worst), SI2, SI1, VS2, VS1, VVS2, VVS1, IF (best))
+-   x length in mm (0--10.74)
+-   y width in mm (0--58.9)
+-   z depth in mm (0--31.8)
+-   depth total depth percentage = z / mean(x, y) = 2 * z / (x + y) (43--79)
+-   table width of top of diamond relative to widest point (43--95)
+
+```{r}
+#Identify Missing Values
+sapply(dt, function(x) sum(is.na(x)))
+```
+
+```{r}
+dt = dt[,!(names(dt) %in% c("...1"))]
+
+cut_chr <- c("Fair", "Good", "Very Good", "Premium", "Ideal")
+aux <- 1:length(cut_chr)
+dt$cut <-aux[match(dt$cut, cut_chr)]
+
+color_chr <- c("J","I","H", "G", "F", "E", "D")
+aux <- 1:length(color_chr)
+dt$color <- aux[match(dt$color, color_chr)]
+
+clarity_chr <- c("I1", "SI2", "SI1", "VS2", "VS1","VVS2","VVS1","IF")
+aux <- 1:length(clarity_chr)
+dt$clarity <-aux[match(dt$clarity, clarity_chr)]
+head(dt)
+```
+
+# Simple regresion 
+
+Now we are going to analyze what variable is most significant in the price prediction.
+
+```{r}
+for(i in colnames(dt)) {
+  if(i=="price"){
+  next
+  }
+  cor <- cor.test(dt$price,dt[[i]])
+  model <- lm(dt$price ~ dt[[i]])
+  sum <- summary(model)
+  print(paste0("correlation price ",i," ",cor$estimate, " linear regresion error ", sum$adj.r.squared))
+}
+```
+These values can be represented in the following table.
+
+```{r message=FALSE,warning=FALSE}
+corrplot(cor(dt), method='circle')
+```
+
+As we can see the carat is the most significant follow by the color, clarity and cut.
+Here, a visual comparison.
+
+```{r message=FALSE,warning=FALSE}
+par(mfrow=c(2,2))
+scatter.smooth(x=dt$carat, y=dt$price, main="price ~ carat")
+scatter.smooth(x=dt$color, y=dt$price, main="price ~ color")
+scatter.smooth(x=dt$clarity, y=dt$price, main="price ~ clarity")
+scatter.smooth(x=dt$cut, y=dt$price, main="price ~ cut")
+```
+
+visualization
+```{r}
+library(ggplot2)
+```
+
+```{r}
+ggplot(dt, aes(x = carat, y = price)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE)
+```
+```{r}
+ggplot(dt, aes(x = cut, y = price)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE)
+```
+```{r}
+ggplot(dt, aes(x = color, y = price)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE)
+```
+
+```{r}
+ggplot(dt, aes(x = clarity, y = price)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE)
+```
+
+```{r message=FALSE,warning=FALSE,webgl=TRUE}
+dt <- sample_n(dt, 5000)
+z<-dt$price
+y<-dt$cut
+x<-dt$carat
+objr<-lm(z ~ x+y)
+grid.lines = 50
+x.pred <- seq(min(x), max(x), length.out = grid.lines)
+y.pred <- seq(min(y), max(y), length.out = grid.lines)
+xy <- expand.grid( x = x.pred, y = y.pred)
+z.pred <- matrix(predict(objr, newdata = xy), 
+                 nrow = grid.lines, ncol = grid.lines)
+fitpoints <- predict(objr)
+scatter3D(x, y, z, pch = 18, cex = 2, 
+          theta = 15, phi = 20, ticktype = "detailed",
+          xlab = "Carat", ylab = "Cut", zlab = "Price",  
+          surf = list(x = x.pred, y = y.pred, z = z.pred,  
+                      facets = NA, fit = fitpoints), main = "")
+
+plotrgl()
+```
+
+Prepare the partition into 70% train 30% test.
+
+```{r message=FALSE,warning=FALSE}
+partition <- createDataPartition(y =dt$price,p = 0.7,list = FALSE)
+dt_train <- dt[partition,]
+Test <- dt[-partition,]
+```
+
+Create de different model using:
+
+-   LM: Fitting Linear
+-   KNN: K-nearest neighbors
+-   RF: Random forest regression
+
+```{r message=FALSE,warning=FALSE}
+#Control using cross validation
+
+ctrol <- trainControl(method="cv",number=10)
+
+```
+
+```{r}
+# LM
+mod  <- train(price~.,data=dt_train,method="lm",trControl=ctrol)
+```
+
+```{r}
+# knn
+values_knn <- expand.grid(k = c(1,3,5)) 
+mod_knn  <- train(price~.,data=dt_train,method="knn",trControl=ctrol,tuneGrid=values_knn)
+```
+
+```{r}
+# Rf
+mod_rf  <- train(price~.,data=dt_train,method="rf",tunelenght=6,trControl=ctrol)
+
+# Results
+print(paste0("LM - RMSE: ",rmse(Test$price,predict(mod,Test))," R2: ", R2_Score(Test$price , predict(mod,Test))))
+print(paste0("KNN - RMSE: ",rmse(Test$price,predict(mod_knn,Test))," R2: ", R2_Score(Test$price , predict(mod_knn,Test))))
+print(paste0("RF - RMSE: ",rmse(Test$price,predict(mod_rf,Test))," R2: ", R2_Score(Test$price , predict(mod_rf,Test))))
+
+```
+
+# Comparison real vs predicted 
+
+Create a new data frame whit the real price and the prediction whit the best models.
+```{r}
+aux <- data.frame("a"=Test$price, "b" = predict(mod_rf,Test),"c"=predict(mod_knn,Test))
+colnames(aux) <- c("real_price", "predicted_RF", "predicted_knn")
+head(aux,20)
+par(mfrow=c(1,2))
+plot(predict(mod_rf,Test),Test$price)
+plot(predict(mod_knn,Test),Test$price)
+```
